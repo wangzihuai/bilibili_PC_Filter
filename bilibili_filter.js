@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
 // @match        https://www.bilibili.com/
+// @updateURL    https://raw.githubusercontent.com/wangzihuai/bilibili_PC_Filter/main/bilibili_filter.js
+// @downloadURL  https://raw.githubusercontent.com/wangzihuai/bilibili_PC_Filter/main/bilibili_filter.js
 // @grant        none
 // ==/UserScript==
 
