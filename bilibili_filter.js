@@ -796,11 +796,167 @@
         }
     }
 
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initializeFilter);
-    } else {
-        // 如果页面已经加载完成，延迟一点启动
-        setTimeout(initializeFilter, 500);
+    function formatCountdownTime(seconds) {
+        const minutes = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     }
+
+    // 访问前的冷静倒计时，避免无意识打开B站
+    function startAccessCountdown(duration = 180) {
+        return new Promise((resolve) => {
+            let remaining = Math.max(0, duration);
+            let countdownTimerId = null;
+
+            const overlay = document.createElement('div');
+            overlay.id = 'bilibiliAccessCountdownOverlay';
+            overlay.style.cssText = `
+                position: fixed;
+                inset: 0;
+                background: rgba(0, 0, 0, 0.88);
+                color: #fff;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                z-index: 100000;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                padding: 20px;
+            `;
+
+            const panel = document.createElement('div');
+            panel.style.cssText = `
+                background: rgba(17, 25, 40, 0.92);
+                border-radius: 16px;
+                padding: 32px;
+                width: min(420px, 90vw);
+                text-align: center;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+            `;
+
+            const title = document.createElement('h2');
+            title.textContent = '冷静 180 秒';
+            title.style.cssText = 'margin: 0 0 12px; font-size: 24px;';
+
+            const description = document.createElement('p');
+            description.textContent = '请先等待 180 秒，再确认自己是否真的需要访问 B 站。利用这段时间思考当前的优先事项。';
+            description.style.cssText = 'margin: 0 0 20px; line-height: 1.6; font-size: 15px; color: #d3d8df;';
+
+            const timerText = document.createElement('div');
+            timerText.style.cssText = 'font-size: 48px; font-weight: bold; margin-bottom: 12px; letter-spacing: 2px;';
+
+            const progressContainer = document.createElement('div');
+            progressContainer.style.cssText = 'width: 100%; height: 6px; background: rgba(255,255,255,0.15); border-radius: 999px; overflow: hidden; margin-bottom: 24px;';
+
+            const progressBar = document.createElement('div');
+            progressBar.style.cssText = 'height: 100%; width: 0%; background: linear-gradient(90deg, #ff5f6d 0%, #ffc371 100%); transition: width 1s linear;';
+            progressContainer.appendChild(progressBar);
+
+            const confirmButton = document.createElement('button');
+            confirmButton.textContent = '等待中...';
+            confirmButton.disabled = true;
+            confirmButton.style.cssText = `
+                width: 100%;
+                padding: 12px 16px;
+                margin-bottom: 12px;
+                border: none;
+                border-radius: 8px;
+                background: #6c757d;
+                color: #fff;
+                font-size: 16px;
+                cursor: not-allowed;
+            `;
+
+            const skipButton = document.createElement('button');
+            skipButton.textContent = '暂不访问，离开页面';
+            skipButton.style.cssText = `
+                width: 100%;
+                padding: 10px 16px;
+                border: 1px solid rgba(255,255,255,0.3);
+                border-radius: 8px;
+                background: transparent;
+                color: #fff;
+                font-size: 14px;
+                cursor: pointer;
+            `;
+
+            panel.appendChild(title);
+            panel.appendChild(description);
+            panel.appendChild(timerText);
+            panel.appendChild(progressContainer);
+            panel.appendChild(confirmButton);
+            panel.appendChild(skipButton);
+            overlay.appendChild(panel);
+
+            (document.body || document.documentElement).appendChild(overlay);
+            const previousOverflow = document.documentElement.style.overflow;
+            document.documentElement.style.overflow = 'hidden';
+
+            const updateCountdown = () => {
+                timerText.textContent = formatCountdownTime(Math.max(0, remaining));
+                const progress = duration === 0 ? 100 : ((duration - remaining) / duration) * 100;
+                progressBar.style.width = `${Math.min(100, Math.max(0, progress))}%`;
+            };
+
+            updateCountdown();
+
+            const unlockConfirmation = () => {
+                confirmButton.disabled = false;
+                confirmButton.textContent = '我确实需要访问';
+                confirmButton.style.background = '#00a1d6';
+                confirmButton.style.cursor = 'pointer';
+            };
+
+            if (remaining === 0) {
+                unlockConfirmation();
+            } else {
+                countdownTimerId = setInterval(() => {
+                    remaining -= 1;
+                    if (remaining <= 0) {
+                        remaining = 0;
+                        updateCountdown();
+                        unlockConfirmation();
+                        if (countdownTimerId) {
+                            clearInterval(countdownTimerId);
+                            countdownTimerId = null;
+                        }
+                    } else {
+                        updateCountdown();
+                    }
+                }, 1000);
+            }
+
+            const cleanup = () => {
+                if (countdownTimerId) {
+                    clearInterval(countdownTimerId);
+                    countdownTimerId = null;
+                }
+                if (overlay.parentNode) {
+                    overlay.remove();
+                }
+                document.documentElement.style.overflow = previousOverflow;
+            };
+
+            confirmButton.addEventListener('click', () => {
+                if (confirmButton.disabled) return;
+                cleanup();
+                resolve();
+            });
+
+            skipButton.addEventListener('click', () => {
+                cleanup();
+                window.location.href = 'about:blank';
+            });
+        });
+    }
+
+    startAccessCountdown(180).then(() => {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initializeFilter);
+        } else {
+            // 如果页面已经加载完成，延迟一点启动
+            setTimeout(initializeFilter, 500);
+        }
+    });
 
 })();
