@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
 // @match        https://www.bilibili.com/
@@ -807,8 +807,13 @@
     // 访问前的冷静倒计时，避免无意识打开B站
     function startAccessCountdown(duration = 180) {
         return new Promise((resolve) => {
-            let remaining = Math.max(0, duration);
+            const totalDuration = Math.max(0, duration);
+            let remaining = totalDuration;
+            let confirmUnlocked = false;
             let countdownTimerId = null;
+            let visibilityHandler = null;
+            let focusHandler = null;
+            const endTimestamp = Date.now() + totalDuration * 1000;
 
             const overlay = document.createElement('div');
             overlay.id = 'bilibiliAccessCountdownOverlay';
@@ -894,13 +899,12 @@
             const previousOverflow = document.documentElement.style.overflow;
             document.documentElement.style.overflow = 'hidden';
 
-            const updateCountdown = () => {
-                timerText.textContent = formatCountdownTime(Math.max(0, remaining));
-                const progress = duration === 0 ? 100 : ((duration - remaining) / duration) * 100;
-                progressBar.style.width = `${Math.min(100, Math.max(0, progress))}%`;
+            const stopInterval = () => {
+                if (countdownTimerId) {
+                    clearInterval(countdownTimerId);
+                    countdownTimerId = null;
+                }
             };
-
-            updateCountdown();
 
             const unlockConfirmation = () => {
                 confirmButton.disabled = false;
@@ -909,34 +913,52 @@
                 confirmButton.style.cursor = 'pointer';
             };
 
+            const updateCountdown = () => {
+                const now = Date.now();
+                remaining = Math.max(0, Math.ceil((endTimestamp - now) / 1000));
+                timerText.textContent = formatCountdownTime(remaining);
+                const progress = totalDuration === 0 ? 100 : ((totalDuration - remaining) / totalDuration) * 100;
+                progressBar.style.width = `${Math.min(100, Math.max(0, progress))}%`;
+
+                if (!confirmUnlocked && remaining === 0) {
+                    confirmUnlocked = true;
+                    unlockConfirmation();
+                    stopInterval();
+                }
+            };
+
+            updateCountdown();
+
             if (remaining === 0) {
+                confirmUnlocked = true;
                 unlockConfirmation();
             } else {
-                countdownTimerId = setInterval(() => {
-                    remaining -= 1;
-                    if (remaining <= 0) {
-                        remaining = 0;
-                        updateCountdown();
-                        unlockConfirmation();
-                        if (countdownTimerId) {
-                            clearInterval(countdownTimerId);
-                            countdownTimerId = null;
-                        }
-                    } else {
-                        updateCountdown();
-                    }
-                }, 1000);
+                countdownTimerId = setInterval(updateCountdown, 1000);
             }
 
+            visibilityHandler = () => {
+                updateCountdown();
+            };
+            focusHandler = () => {
+                updateCountdown();
+            };
+            document.addEventListener('visibilitychange', visibilityHandler);
+            window.addEventListener('focus', focusHandler);
+
             const cleanup = () => {
-                if (countdownTimerId) {
-                    clearInterval(countdownTimerId);
-                    countdownTimerId = null;
-                }
+                stopInterval();
                 if (overlay.parentNode) {
                     overlay.remove();
                 }
                 document.documentElement.style.overflow = previousOverflow;
+                if (visibilityHandler) {
+                    document.removeEventListener('visibilitychange', visibilityHandler);
+                    visibilityHandler = null;
+                }
+                if (focusHandler) {
+                    window.removeEventListener('focus', focusHandler);
+                    focusHandler = null;
+                }
             };
 
             confirmButton.addEventListener('click', () => {
