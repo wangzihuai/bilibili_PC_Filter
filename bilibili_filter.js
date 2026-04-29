@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.2
+// @version      1.3
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
 // @match        https://www.bilibili.com/
@@ -810,10 +810,11 @@
             const totalDuration = Math.max(0, duration);
             let remaining = totalDuration;
             let confirmUnlocked = false;
+            let paused = false;
             let countdownTimerId = null;
             let visibilityHandler = null;
             let focusHandler = null;
-            const endTimestamp = Date.now() + totalDuration * 1000;
+            let blurHandler = null;
 
             const overlay = document.createElement('div');
             overlay.id = 'bilibiliAccessCountdownOverlay';
@@ -859,6 +860,15 @@
             progressBar.style.cssText = 'height: 100%; width: 0%; background: linear-gradient(90deg, #ff5f6d 0%, #ffc371 100%); transition: width 1s linear;';
             progressContainer.appendChild(progressBar);
 
+            const pauseHint = document.createElement('div');
+            pauseHint.textContent = '页面不在前台，倒计时已暂停';
+            pauseHint.style.cssText = `
+                margin: -12px 0 24px;
+                font-size: 12px;
+                color: #ffb347;
+                display: none;
+            `;
+
             const confirmButton = document.createElement('button');
             confirmButton.textContent = '等待中...';
             confirmButton.disabled = true;
@@ -891,6 +901,7 @@
             panel.appendChild(description);
             panel.appendChild(timerText);
             panel.appendChild(progressContainer);
+            panel.appendChild(pauseHint);
             panel.appendChild(confirmButton);
             panel.appendChild(skipButton);
             overlay.appendChild(panel);
@@ -898,13 +909,6 @@
             (document.body || document.documentElement).appendChild(overlay);
             const previousOverflow = document.documentElement.style.overflow;
             document.documentElement.style.overflow = 'hidden';
-
-            const stopInterval = () => {
-                if (countdownTimerId) {
-                    clearInterval(countdownTimerId);
-                    countdownTimerId = null;
-                }
-            };
 
             const unlockConfirmation = () => {
                 confirmButton.disabled = false;
@@ -914,36 +918,73 @@
             };
 
             const updateCountdown = () => {
-                const now = Date.now();
-                remaining = Math.max(0, Math.ceil((endTimestamp - now) / 1000));
-                timerText.textContent = formatCountdownTime(remaining);
+                timerText.textContent = formatCountdownTime(Math.max(0, remaining));
                 const progress = totalDuration === 0 ? 100 : ((totalDuration - remaining) / totalDuration) * 100;
                 progressBar.style.width = `${Math.min(100, Math.max(0, progress))}%`;
+            };
 
-                if (!confirmUnlocked && remaining === 0) {
-                    confirmUnlocked = true;
-                    unlockConfirmation();
-                    stopInterval();
+            const stopInterval = () => {
+                if (countdownTimerId) {
+                    clearInterval(countdownTimerId);
+                    countdownTimerId = null;
                 }
             };
 
-            updateCountdown();
+            const onTimerComplete = () => {
+                remaining = 0;
+                updateCountdown();
+                if (!confirmUnlocked) {
+                    confirmUnlocked = true;
+                    unlockConfirmation();
+                }
+                stopInterval();
+            };
 
+            const tick = () => {
+                if (paused || remaining <= 0) {
+                    return;
+                }
+                remaining -= 1;
+                if (remaining <= 0) {
+                    onTimerComplete();
+                } else {
+                    updateCountdown();
+                }
+            };
+
+            const ensureInterval = () => {
+                if (!countdownTimerId && remaining > 0) {
+                    countdownTimerId = setInterval(tick, 1000);
+                }
+            };
+
+            const setPausedState = (value) => {
+                const newState = Boolean(value);
+                if (paused === newState) return;
+                paused = newState;
+                pauseHint.style.display = paused ? 'block' : 'none';
+            };
+
+            updateCountdown();
             if (remaining === 0) {
-                confirmUnlocked = true;
-                unlockConfirmation();
+                onTimerComplete();
             } else {
-                countdownTimerId = setInterval(updateCountdown, 1000);
+                ensureInterval();
             }
 
             visibilityHandler = () => {
-                updateCountdown();
+                setPausedState(document.hidden);
             };
             focusHandler = () => {
-                updateCountdown();
+                setPausedState(false);
+            };
+            blurHandler = () => {
+                setPausedState(true);
             };
             document.addEventListener('visibilitychange', visibilityHandler);
             window.addEventListener('focus', focusHandler);
+            window.addEventListener('blur', blurHandler);
+            setPausedState(document.hidden || !document.hasFocus());
 
             const cleanup = () => {
                 stopInterval();
@@ -958,6 +999,10 @@
                 if (focusHandler) {
                     window.removeEventListener('focus', focusHandler);
                     focusHandler = null;
+                }
+                if (blurHandler) {
+                    window.removeEventListener('blur', blurHandler);
+                    blurHandler = null;
                 }
             };
 
