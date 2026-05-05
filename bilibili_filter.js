@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.3
+// @version      1.4
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
 // @match        https://www.bilibili.com/
@@ -787,6 +787,385 @@
         }
     }
 
+    // 浏览时间记录器
+    class UsageTimeTracker {
+        constructor() {
+            this.logsKey = 'bilibili_usage_time_logs';
+            this.sessionStart = Date.now();
+            this.activeSeconds = 0;
+            this.todayBaseSeconds = this.calculateTodayBaseSeconds();
+            this.isActive = !document.hidden && document.hasFocus();
+            this.lastTick = Date.now();
+            this.intervalId = null;
+            this.reminderInterval = 300; // 5分钟
+            this.nextReminderAt = this.reminderInterval;
+            this.reminderVisible = false;
+            this.recordsLimit = 60;
+            this.sessionSaved = false;
+
+            this.initUI();
+            this.bindEvents();
+            this.start();
+        }
+
+        initUI() {
+            this.widget = document.createElement('div');
+            this.widget.id = 'bilibiliUsageTracker';
+            this.widget.style.cssText = `
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                width: 220px;
+                background: rgba(255, 255, 255, 0.95);
+                border-radius: 12px;
+                padding: 14px 16px;
+                box-shadow: 0 8px 24px rgba(15, 23, 42, 0.18);
+                font-size: 13px;
+                color: #1f2d3d;
+                z-index: 10001;
+                border: 1px solid rgba(0,0,0,0.05);
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            `;
+
+            const title = document.createElement('div');
+            title.textContent = '⏱️ 浏览时间记录';
+            title.style.cssText = 'font-weight: 600; margin-bottom: 4px;';
+            this.widget.appendChild(title);
+
+            this.statusText = document.createElement('div');
+            this.statusText.style.cssText = 'font-size: 12px; color: #64748b; margin-bottom: 8px;';
+            this.widget.appendChild(this.statusText);
+
+            this.sessionValueEl = document.createElement('span');
+            this.sessionValueEl.style.cssText = 'font-weight: 600;';
+            const sessionRow = document.createElement('div');
+            sessionRow.style.cssText = 'display: flex; justify-content: space-between; margin-bottom: 4px;';
+            sessionRow.innerHTML = '<span>本次访问</span>';
+            sessionRow.appendChild(this.sessionValueEl);
+            this.widget.appendChild(sessionRow);
+
+            this.todayValueEl = document.createElement('span');
+            this.todayValueEl.style.cssText = 'font-weight: 600;';
+            const todayRow = document.createElement('div');
+            todayRow.style.cssText = 'display: flex; justify-content: space-between;';
+            todayRow.innerHTML = '<span>今日累计</span>';
+            todayRow.appendChild(this.todayValueEl);
+            this.widget.appendChild(todayRow);
+
+            this.pauseHintEl = document.createElement('div');
+            this.pauseHintEl.textContent = '页面不在前台，计时暂停';
+            this.pauseHintEl.style.cssText = 'display: none; font-size: 12px; color: #f59e0b; margin-top: 6px;';
+            this.widget.appendChild(this.pauseHintEl);
+
+            this.historyToggle = document.createElement('button');
+            this.historyToggle.textContent = '查看记录';
+            this.historyToggle.style.cssText = `
+                margin-top: 10px;
+                width: 100%;
+                border: none;
+                background: #f1f5f9;
+                color: #0f172a;
+                padding: 6px 0;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 12px;
+            `;
+            this.widget.appendChild(this.historyToggle);
+
+            this.historyPanel = document.createElement('div');
+            this.historyPanel.style.cssText = `
+                margin-top: 10px;
+                background: #f8fafc;
+                border-radius: 10px;
+                padding: 10px;
+                max-height: 220px;
+                overflow-y: auto;
+                border: 1px solid rgba(148, 163, 184, 0.3);
+                display: none;
+            `;
+
+            const currentRow = document.createElement('div');
+            currentRow.style.cssText = 'display: flex; justify-content: space-between; font-weight: 600; font-size: 12px; margin-bottom: 8px;';
+            const currentLabel = document.createElement('span');
+            currentLabel.textContent = '当前会话';
+            this.currentSessionHistoryValue = document.createElement('span');
+            this.currentSessionHistoryValue.style.cssText = 'font-family: SFMono-Regular, Menlo, monospace;';
+            currentRow.appendChild(currentLabel);
+            currentRow.appendChild(this.currentSessionHistoryValue);
+            this.historyPanel.appendChild(currentRow);
+
+            this.historyList = document.createElement('div');
+            this.historyList.style.cssText = 'display: flex; flex-direction: column; gap: 6px;';
+            this.historyPanel.appendChild(this.historyList);
+
+            this.widget.appendChild(this.historyPanel);
+            document.body.appendChild(this.widget);
+
+            this.updateDisplay();
+        }
+
+        bindEvents() {
+            this.visibilityHandler = () => this.updateActiveState();
+            this.focusHandler = () => this.updateActiveState();
+            this.blurHandler = () => this.updateActiveState();
+            this.historyToggle.addEventListener('click', () => this.toggleHistoryPanel());
+            document.addEventListener('visibilitychange', this.visibilityHandler);
+            window.addEventListener('focus', this.focusHandler);
+            window.addEventListener('blur', this.blurHandler);
+
+            this.beforeUnloadHandler = () => this.persistSession();
+            window.addEventListener('beforeunload', this.beforeUnloadHandler);
+            window.addEventListener('pagehide', this.beforeUnloadHandler);
+        }
+
+        start() {
+            this.lastTick = Date.now();
+            this.intervalId = setInterval(() => this.tick(), 1000);
+            this.updateActiveState();
+        }
+
+        updateActiveState() {
+            const currentlyActive = !document.hidden && document.hasFocus();
+            if (currentlyActive && !this.isActive) {
+                this.lastTick = Date.now();
+            }
+            this.isActive = currentlyActive;
+            this.pauseHintEl.style.display = this.isActive ? 'none' : 'block';
+            this.statusText.textContent = this.isActive ? '计时中·保持专注' : '计时暂停';
+        }
+
+        tick() {
+            const now = Date.now();
+            if (!this.isActive) {
+                this.lastTick = now;
+                return;
+            }
+
+            const deltaMs = now - this.lastTick;
+            if (deltaMs < 1000) {
+                return;
+            }
+            const extraMs = deltaMs % 1000;
+            const deltaSeconds = Math.floor(deltaMs / 1000);
+            this.lastTick = now - extraMs;
+
+            this.activeSeconds += deltaSeconds;
+            this.updateDisplay();
+            this.checkReminder();
+        }
+
+        updateDisplay() {
+            this.sessionValueEl.textContent = this.formatDuration(this.activeSeconds);
+            const todayTotal = this.todayBaseSeconds + this.activeSeconds;
+            this.todayValueEl.textContent = this.formatDuration(todayTotal);
+            if (this.currentSessionHistoryValue) {
+                this.currentSessionHistoryValue.textContent = this.formatDuration(this.activeSeconds);
+            }
+        }
+
+        checkReminder() {
+            if (this.reminderVisible) return;
+            if (this.activeSeconds === 0) return;
+            if (this.activeSeconds >= this.nextReminderAt) {
+                this.showReminder();
+            }
+        }
+
+        showReminder() {
+            this.reminderVisible = true;
+            const minutes = Math.floor(this.activeSeconds / 60) || 0;
+
+            const reminder = document.createElement('div');
+            reminder.style.cssText = `
+                position: fixed;
+                top: 40%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(15,23,42,0.95);
+                color: white;
+                padding: 24px 28px;
+                border-radius: 14px;
+                z-index: 10002;
+                text-align: center;
+                width: min(360px, 90vw);
+                box-shadow: 0 20px 40px rgba(15,23,42,0.4);
+            `;
+
+            const message = document.createElement('div');
+            message.style.cssText = 'font-size: 18px; font-weight: 600; margin-bottom: 12px;';
+            message.textContent = `你已经访问 ${minutes} 分钟了`;
+            reminder.appendChild(message);
+
+            const subText = document.createElement('div');
+            subText.style.cssText = 'font-size: 13px; color: #cbd5f5; margin-bottom: 18px;';
+            subText.textContent = '适当休息，提高效率 ✨';
+            reminder.appendChild(subText);
+
+            const dismissButton = document.createElement('button');
+            dismissButton.textContent = '继续努力';
+            dismissButton.style.cssText = `
+                padding: 10px 20px;
+                background: #3b82f6;
+                color: white;
+                border: none;
+                border-radius: 999px;
+                cursor: pointer;
+                font-size: 14px;
+            `;
+            dismissButton.addEventListener('click', () => {
+                reminder.remove();
+                this.reminderVisible = false;
+                this.nextReminderAt = this.activeSeconds + this.reminderInterval;
+            });
+            reminder.appendChild(dismissButton);
+
+            document.body.appendChild(reminder);
+        }
+
+        toggleHistoryPanel() {
+            const isHidden = this.historyPanel.style.display === 'none';
+            this.historyPanel.style.display = isHidden ? 'block' : 'none';
+            this.historyToggle.textContent = isHidden ? '收起记录' : '查看记录';
+            if (isHidden) {
+                this.renderHistory();
+            }
+        }
+
+        renderHistory() {
+            const logs = this.loadLogs();
+            this.historyList.innerHTML = '';
+
+            if (logs.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size: 12px; color: #94a3b8;';
+                empty.textContent = '暂无历史记录';
+                this.historyList.appendChild(empty);
+                return;
+            }
+
+            logs.slice(0, 10).forEach(log => {
+                const row = document.createElement('div');
+                row.style.cssText = `
+                    display: flex;
+                    flex-direction: column;
+                    padding: 8px;
+                    border-radius: 8px;
+                    background: white;
+                    border: 1px solid rgba(148, 163, 184, 0.3);
+                    font-size: 12px;
+                    gap: 2px;
+                `;
+
+                const timeText = document.createElement('div');
+                timeText.textContent = `${this.formatLogTime(log.sessionStart)} · ${this.getDayLabel(log.dayKey)}`;
+                timeText.style.cssText = 'color: #475569; font-weight: 600;';
+
+                const durationText = document.createElement('div');
+                durationText.textContent = `时长 ${this.formatDuration(log.durationSeconds)}`;
+                durationText.style.cssText = 'color: #0f172a;';
+
+                row.appendChild(timeText);
+                row.appendChild(durationText);
+                this.historyList.appendChild(row);
+            });
+        }
+
+        formatDuration(totalSeconds) {
+            const seconds = Math.max(0, Math.floor(totalSeconds));
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        }
+
+        formatLogTime(timestamp) {
+            try {
+                const date = new Date(timestamp);
+                const yy = date.getFullYear();
+                const mm = String(date.getMonth() + 1).padStart(2, '0');
+                const dd = String(date.getDate()).padStart(2, '0');
+                const hh = String(date.getHours()).padStart(2, '0');
+                const min = String(date.getMinutes()).padStart(2, '0');
+                return `${yy}-${mm}-${dd} ${hh}:${min}`;
+            } catch (err) {
+                return '未知时间';
+            }
+        }
+
+        getDayLabel(dayKey) {
+            const todayKey = this.getDayKey(Date.now());
+            if (dayKey === todayKey) return '今天';
+            const yesterday = this.getDayKey(Date.now() - 86400000);
+            if (dayKey === yesterday) return '昨天';
+            return dayKey;
+        }
+
+        loadLogs() {
+            try {
+                const data = localStorage.getItem(this.logsKey);
+                return data ? JSON.parse(data) : [];
+            } catch (err) {
+                console.log('Usage tracker load error:', err);
+                return [];
+            }
+        }
+
+        saveLogs(logs) {
+            try {
+                localStorage.setItem(this.logsKey, JSON.stringify(logs));
+            } catch (err) {
+                console.log('Usage tracker save error:', err);
+            }
+        }
+
+        getDayKey(timestamp) {
+            const date = new Date(timestamp);
+            const yy = date.getFullYear();
+            const mm = String(date.getMonth() + 1).padStart(2, '0');
+            const dd = String(date.getDate()).padStart(2, '0');
+            return `${yy}-${mm}-${dd}`;
+        }
+
+        calculateTodayBaseSeconds() {
+            const todayKey = this.getDayKey(Date.now());
+            const logs = this.loadLogs();
+            return logs.reduce((sum, log) => {
+                if (log.dayKey === todayKey) {
+                    return sum + (log.durationSeconds || 0);
+                }
+                return sum;
+            }, 0);
+        }
+
+        persistSession() {
+            if (this.sessionSaved) return;
+            if (this.activeSeconds < 5) return;
+            this.sessionSaved = true;
+
+            const logs = this.loadLogs();
+            logs.unshift({
+                sessionStart: this.sessionStart,
+                durationSeconds: this.activeSeconds,
+                dayKey: this.getDayKey(this.sessionStart),
+                savedAt: Date.now()
+            });
+
+            if (logs.length > this.recordsLimit) {
+                logs.length = this.recordsLimit;
+            }
+            this.saveLogs(logs);
+        }
+    }
+
+    let appStarted = false;
+
+    function startApplication() {
+        if (appStarted) return;
+        appStarted = true;
+        initializeFilter();
+        new UsageTimeTracker();
+    }
+
     // 等待页面加载完成后启动过滤器
     function initializeFilter() {
         try {
@@ -1021,10 +1400,14 @@
 
     startAccessCountdown(180).then(() => {
         if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initializeFilter);
+            const onReady = () => {
+                document.removeEventListener('DOMContentLoaded', onReady);
+                startApplication();
+            };
+            document.addEventListener('DOMContentLoaded', onReady);
         } else {
             // 如果页面已经加载完成，延迟一点启动
-            setTimeout(initializeFilter, 500);
+            setTimeout(startApplication, 500);
         }
     });
 
