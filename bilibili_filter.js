@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.5
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
-// @match        https://www.bilibili.com/
+// @match        https://www.bilibili.com/*
 // @updateURL    https://raw.githubusercontent.com/wangzihuai/bilibili_PC_Filter/main/bilibili_filter.js
 // @downloadURL  https://raw.githubusercontent.com/wangzihuai/bilibili_PC_Filter/main/bilibili_filter.js
 // @grant        none
@@ -1158,12 +1158,26 @@
     }
 
     let appStarted = false;
+    const isHomePage = window.location.pathname === '/' ||
+        window.location.pathname === '' ||
+        window.location.pathname === '/index.html';
 
     function startApplication() {
         if (appStarted) return;
         appStarted = true;
-        initializeFilter();
+        if (isHomePage) {
+            initializeFilter();
+        }
         new UsageTimeTracker();
+    }
+
+    function runAfterDomReady(callback, delay = 200) {
+        const wrapped = () => setTimeout(callback, Math.max(0, delay));
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', wrapped, { once: true });
+        } else {
+            wrapped();
+        }
     }
 
     // 等待页面加载完成后启动过滤器
@@ -1398,17 +1412,12 @@
         });
     }
 
-    startAccessCountdown(180).then(() => {
-        if (document.readyState === 'loading') {
-            const onReady = () => {
-                document.removeEventListener('DOMContentLoaded', onReady);
-                startApplication();
-            };
-            document.addEventListener('DOMContentLoaded', onReady);
-        } else {
-            // 如果页面已经加载完成，延迟一点启动
-            setTimeout(startApplication, 500);
-        }
-    });
+    if (isHomePage) {
+        startAccessCountdown(180).then(() => {
+            runAfterDomReady(startApplication, 500);
+        });
+    } else {
+        runAfterDomReady(startApplication, 200);
+    }
 
 })();
