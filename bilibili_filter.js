@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.6
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
 // @match        https://www.bilibili.com/*
@@ -1161,6 +1161,7 @@
     const isHomePage = window.location.pathname === '/' ||
         window.location.pathname === '' ||
         window.location.pathname === '/index.html';
+    const getInitialCountdownDuration = () => Math.floor(Math.random() * 41) + 5;
 
     function startApplication() {
         if (appStarted) return;
@@ -1236,11 +1237,11 @@
             `;
 
             const title = document.createElement('h2');
-            title.textContent = '冷静 180 秒';
+            title.textContent = `冷静 ${totalDuration} 秒`;
             title.style.cssText = 'margin: 0 0 12px; font-size: 24px;';
 
             const description = document.createElement('p');
-            description.textContent = '请先等待 180 秒，再确认自己是否真的需要访问 B 站。利用这段时间思考当前的优先事项。';
+            description.textContent = `请先等待 ${totalDuration} 秒，再确认自己是否真的需要访问 B 站。利用这段时间思考当前的优先事项。`;
             description.style.cssText = 'margin: 0 0 20px; line-height: 1.6; font-size: 15px; color: #d3d8df;';
 
             const timerText = document.createElement('div');
@@ -1413,7 +1414,9 @@
     }
 
     if (isHomePage) {
-        startAccessCountdown(180).then(() => {
+        const countdownDuration = getInitialCountdownDuration();
+        console.log(`Bilibili Filter: initial countdown ${countdownDuration}s`);
+        startAccessCountdown(countdownDuration).then(() => {
             runAfterDomReady(startApplication, 500);
         });
     } else {
