@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.6
+// @version      1.7
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
 // @match        https://www.bilibili.com/*
@@ -800,6 +800,7 @@
             this.reminderInterval = 300; // 5分钟
             this.nextReminderAt = this.reminderInterval;
             this.reminderVisible = false;
+            this.currentReminder = null;
             this.recordsLimit = 60;
             this.sessionSaved = false;
 
@@ -964,6 +965,10 @@
         }
 
         checkReminder() {
+            if (this.isVideoPage()) {
+                this.dismissReminder();
+                return;
+            }
             if (this.reminderVisible) return;
             if (this.activeSeconds === 0) return;
             if (this.activeSeconds >= this.nextReminderAt) {
@@ -971,7 +976,20 @@
             }
         }
 
+        isVideoPage() {
+            return window.location.pathname.startsWith('/video');
+        }
+
+        dismissReminder() {
+            if (this.currentReminder && this.currentReminder.parentNode) {
+                this.currentReminder.remove();
+            }
+            this.currentReminder = null;
+            this.reminderVisible = false;
+        }
+
         showReminder() {
+            if (this.isVideoPage()) return;
             this.reminderVisible = true;
             const minutes = Math.floor(this.activeSeconds / 60) || 0;
 
@@ -1013,12 +1031,12 @@
                 font-size: 14px;
             `;
             dismissButton.addEventListener('click', () => {
-                reminder.remove();
-                this.reminderVisible = false;
+                this.dismissReminder();
                 this.nextReminderAt = this.activeSeconds + this.reminderInterval;
             });
             reminder.appendChild(dismissButton);
 
+            this.currentReminder = reminder;
             document.body.appendChild(reminder);
         }
 
