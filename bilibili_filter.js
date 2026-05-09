@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.8
+// @version      1.9
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
 // @match        https://www.bilibili.com/*
@@ -20,9 +20,14 @@
             this.keywords = JSON.parse(localStorage.getItem('bilibili_filtered_keywords')) || [];
             this.blockedUsers = JSON.parse(localStorage.getItem('bilibili_blocked_users')) || [];
             this.isUIVisible = false;
-            this.isFilteredContentVisible = false;
             this.hiddenFlagAttr = 'data-bilibili-filter-hidden';
             this.prevDisplayAttr = 'data-bilibili-filter-prev-display';
+            this.manualShowAttr = 'data-bilibili-filter-manual-show';
+            this.cardIdAttr = 'data-bilibili-filter-card-id';
+            this.prevPositionAttr = 'data-bilibili-filter-prev-position';
+            this.placeholderClass = 'bilibili-filter-placeholder';
+            this.rehideBtnClass = 'bilibili-filter-rehide-btn';
+            this.cardSeq = 0;
 
             this.initUI();
             this.initHoverHandler();
@@ -91,28 +96,6 @@
             `;
             toggleButton.addEventListener('click', () => this.toggleUI());
             document.body.appendChild(toggleButton);
-
-            // 创建显示/隐藏被过滤内容按钮
-            this.filteredContentToggle = document.createElement('div');
-            this.filteredContentToggle.id = 'bilibiliFilteredContentToggle';
-            this.filteredContentToggle.style.cssText = `
-                position: fixed;
-                top: 80px;
-                right: 130px;
-                z-index: 10001;
-                background: #16a34a;
-                color: white;
-                border: none;
-                padding: 8px 12px;
-                border-radius: 6px;
-                cursor: pointer;
-                font-size: 12px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-                user-select: none;
-            `;
-            this.filteredContentToggle.addEventListener('click', () => this.toggleFilteredContentVisibility());
-            document.body.appendChild(this.filteredContentToggle);
-            this.updateFilteredContentToggleButton();
 
             // 创建主面板
             const panel = document.createElement('div');
@@ -319,23 +302,6 @@
             this.updateStats();
         }
 
-        updateFilteredContentToggleButton() {
-            if (!this.filteredContentToggle) return;
-            if (this.isFilteredContentVisible) {
-                this.filteredContentToggle.innerText = '🙈 恢复过滤';
-                this.filteredContentToggle.style.background = '#dc2626';
-            } else {
-                this.filteredContentToggle.innerText = '👁 显示被过滤';
-                this.filteredContentToggle.style.background = '#16a34a';
-            }
-        }
-
-        toggleFilteredContentVisibility() {
-            this.isFilteredContentVisible = !this.isFilteredContentVisible;
-            this.updateFilteredContentToggleButton();
-            this.filterContent();
-        }
-
         markAndHideElement(element) {
             if (!element) return;
             if (element.getAttribute(this.hiddenFlagAttr) !== '1') {
@@ -354,9 +320,155 @@
             element.removeAttribute(this.prevDisplayAttr);
         }
 
-        restoreAllHiddenElements() {
-            const hiddenElements = document.querySelectorAll(`[${this.hiddenFlagAttr}="1"]`);
-            hiddenElements.forEach(element => this.restoreHiddenElement(element));
+        ensureCardId(card) {
+            let cardId = card.getAttribute(this.cardIdAttr);
+            if (cardId) return cardId;
+            this.cardSeq += 1;
+            cardId = `card-${Date.now()}-${this.cardSeq}`;
+            card.setAttribute(this.cardIdAttr, cardId);
+            return cardId;
+        }
+
+        getPlaceholderByCardId(cardId) {
+            return document.querySelector(`.${this.placeholderClass}[data-target-id="${cardId}"]`);
+        }
+
+        createPlaceholderForCard(card) {
+            const cardId = this.ensureCardId(card);
+            let placeholder = this.getPlaceholderByCardId(cardId);
+            if (!placeholder) {
+                placeholder = document.createElement('div');
+                placeholder.className = this.placeholderClass;
+                placeholder.setAttribute('data-target-id', cardId);
+                placeholder.style.cssText = `
+                    border: 1px dashed #f59e0b;
+                    background: #fff7ed;
+                    color: #7c2d12;
+                    border-radius: 10px;
+                    padding: 14px;
+                    margin: 10px 0;
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    gap: 10px;
+                    font-size: 12px;
+                `;
+
+                const text = document.createElement('span');
+                text.innerText = '该视频已被过滤（可能误过滤）';
+                placeholder.appendChild(text);
+
+                const showBtn = document.createElement('button');
+                showBtn.innerText = '显示此视频';
+                showBtn.style.cssText = `
+                    padding: 6px 10px;
+                    border: none;
+                    border-radius: 6px;
+                    background: #f97316;
+                    color: #fff;
+                    cursor: pointer;
+                    font-size: 12px;
+                    white-space: nowrap;
+                `;
+                showBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.showSingleFilteredCard(cardId);
+                });
+                placeholder.appendChild(showBtn);
+
+                card.insertAdjacentElement('afterend', placeholder);
+            }
+            placeholder.style.display = '';
+            return placeholder;
+        }
+
+        removePlaceholderForCard(card) {
+            const cardId = card.getAttribute(this.cardIdAttr);
+            if (!cardId) return;
+            const placeholder = this.getPlaceholderByCardId(cardId);
+            if (placeholder && placeholder.parentNode) {
+                placeholder.remove();
+            }
+        }
+
+        attachRehideButton(card) {
+            if (card.querySelector(`.${this.rehideBtnClass}`)) return;
+            if (!card.hasAttribute(this.prevPositionAttr)) {
+                card.setAttribute(this.prevPositionAttr, card.style.position || '');
+                if (window.getComputedStyle(card).position === 'static') {
+                    card.style.position = 'relative';
+                }
+            }
+
+            const rehideBtn = document.createElement('button');
+            rehideBtn.className = this.rehideBtnClass;
+            rehideBtn.innerText = '重新隐藏';
+            rehideBtn.style.cssText = `
+                position: absolute;
+                top: 8px;
+                right: 8px;
+                z-index: 10;
+                padding: 4px 8px;
+                border: none;
+                border-radius: 6px;
+                background: rgba(220, 38, 38, 0.92);
+                color: #fff;
+                cursor: pointer;
+                font-size: 12px;
+            `;
+            rehideBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                card.removeAttribute(this.manualShowAttr);
+                this.removeRehideButton(card);
+                this.hideVideoCard(card);
+                this.hiddenCount = document.querySelectorAll(`[${this.hiddenFlagAttr}="1"]`).length;
+                this.updateStats();
+            });
+            card.appendChild(rehideBtn);
+        }
+
+        removeRehideButton(card) {
+            const btn = card.querySelector(`.${this.rehideBtnClass}`);
+            if (btn && btn.parentNode) {
+                btn.remove();
+            }
+            if (card.hasAttribute(this.prevPositionAttr)) {
+                card.style.position = card.getAttribute(this.prevPositionAttr) || '';
+                card.removeAttribute(this.prevPositionAttr);
+            }
+        }
+
+        hideVideoCard(card) {
+            this.removeRehideButton(card);
+            this.markAndHideElement(card);
+            this.createPlaceholderForCard(card);
+        }
+
+        showSingleFilteredCard(cardId) {
+            const card = document.querySelector(`.bili-video-card[${this.cardIdAttr}="${cardId}"]`);
+            if (!card) return;
+            card.setAttribute(this.manualShowAttr, '1');
+            this.restoreHiddenElement(card);
+            this.attachRehideButton(card);
+            const placeholder = this.getPlaceholderByCardId(cardId);
+            if (placeholder) {
+                placeholder.style.display = 'none';
+            }
+            this.hiddenCount = document.querySelectorAll(`[${this.hiddenFlagAttr}="1"]`).length;
+            this.updateStats();
+        }
+
+        cleanupOrphanPlaceholders() {
+            const placeholders = document.querySelectorAll(`.${this.placeholderClass}`);
+            placeholders.forEach((placeholder) => {
+                const cardId = placeholder.getAttribute('data-target-id');
+                if (!cardId) return;
+                const targetCard = document.querySelector(`.bili-video-card[${this.cardIdAttr}="${cardId}"]`);
+                if (!targetCard && placeholder.parentNode) {
+                    placeholder.remove();
+                }
+            });
         }
 
         // 初始化鼠标悬停处理
@@ -748,22 +860,25 @@
             try {
                 let hiddenCount = 0;
 
-                if (this.isFilteredContentVisible) {
-                    this.restoreAllHiddenElements();
-                    this.hiddenCount = 0;
-                    this.updateStats();
-                    return;
-                }
-
                 // 过滤视频卡片
                 const videoCards = document.querySelectorAll('.bili-video-card');
                 videoCards.forEach(card => {
                     try {
+                        const isManualShown = card.getAttribute(this.manualShowAttr) === '1';
                         if (this.shouldHideElement(card)) {
-                            this.markAndHideElement(card);
+                            if (isManualShown) {
+                                this.restoreHiddenElement(card);
+                                this.createPlaceholderForCard(card).style.display = 'none';
+                                this.attachRehideButton(card);
+                            } else {
+                                this.hideVideoCard(card);
+                            }
                             hiddenCount++;
                         } else {
+                            card.removeAttribute(this.manualShowAttr);
+                            this.removeRehideButton(card);
                             this.restoreHiddenElement(card);
+                            this.removePlaceholderForCard(card);
                         }
                     } catch (err) {
                         console.log('Filter card error:', err);
@@ -772,6 +887,7 @@
 
                 // 过滤其他类型的内容
                 this.filterOtherContent();
+                this.cleanupOrphanPlaceholders();
 
                 hiddenCount = document.querySelectorAll(`[${this.hiddenFlagAttr}="1"]`).length;
                 this.hiddenCount = hiddenCount;
@@ -842,7 +958,7 @@
             if (statsDiv) {
                 statsDiv.innerHTML = `
                     <div>📊 过滤统计</div>
-                    <div>过滤状态: ${this.isFilteredContentVisible ? '已显示被过滤内容' : '正常过滤中'}</div>
+                    <div>提示: 每条被过滤视频可单独显示</div>
                     <div>关键词规则: ${this.keywords.length} 条</div>
                     <div>屏蔽UP主: ${this.blockedUsers.length} 个</div>
                     <div>本次隐藏: ${this.hiddenCount || 0} 项内容</div>
