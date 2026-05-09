@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      1.10
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
 // @match        https://www.bilibili.com/*
@@ -345,18 +345,13 @@
                     background: #fff7ed;
                     color: #7c2d12;
                     border-radius: 10px;
-                    padding: 14px;
+                    padding: 10px;
                     margin: 10px 0;
                     display: flex;
                     align-items: center;
-                    justify-content: space-between;
-                    gap: 10px;
+                    justify-content: flex-end;
                     font-size: 12px;
                 `;
-
-                const text = document.createElement('span');
-                text.innerText = '该视频已被过滤（可能误过滤）';
-                placeholder.appendChild(text);
 
                 const showBtn = document.createElement('button');
                 showBtn.innerText = '显示此视频';
