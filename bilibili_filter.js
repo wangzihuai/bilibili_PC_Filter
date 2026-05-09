@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站内容过滤器
 // @namespace    http://tampermonkey.net/
-// @version      1.10
+// @version      1.11
 // @description  过滤B站推荐内容：支持关键词过滤、UP主过滤、鼠标悬停快速添加功能
 // @author       BilibiliFilter
 // @match        https://www.bilibili.com/*
@@ -345,15 +345,21 @@
                     background: #fff7ed;
                     color: #7c2d12;
                     border-radius: 10px;
-                    padding: 10px;
+                    padding: 10px 12px;
                     margin: 10px 0;
                     display: flex;
                     align-items: center;
-                    justify-content: flex-end;
+                    justify-content: center;
+                    min-height: 52px;
+                    width: 100%;
+                    box-sizing: border-box;
+                    position: relative;
+                    z-index: 2;
                     font-size: 12px;
                 `;
 
                 const showBtn = document.createElement('button');
+                showBtn.type = 'button';
                 showBtn.innerText = '显示此视频';
                 showBtn.style.cssText = `
                     padding: 6px 10px;
@@ -373,7 +379,10 @@
 
                 card.insertAdjacentElement('afterend', placeholder);
             }
-            placeholder.style.display = '';
+            placeholder.style.setProperty('display', 'flex', 'important');
+            placeholder.style.setProperty('visibility', 'visible', 'important');
+            placeholder.style.setProperty('opacity', '1', 'important');
+            placeholder.style.setProperty('pointer-events', 'auto', 'important');
             return placeholder;
         }
 
@@ -441,7 +450,7 @@
         }
 
         showSingleFilteredCard(cardId) {
-            const card = document.querySelector(`.bili-video-card[${this.cardIdAttr}="${cardId}"]`);
+            const card = document.querySelector(`[${this.cardIdAttr}="${cardId}"]`);
             if (!card) return;
             card.setAttribute(this.manualShowAttr, '1');
             this.restoreHiddenElement(card);
@@ -459,7 +468,7 @@
             placeholders.forEach((placeholder) => {
                 const cardId = placeholder.getAttribute('data-target-id');
                 if (!cardId) return;
-                const targetCard = document.querySelector(`.bili-video-card[${this.cardIdAttr}="${cardId}"]`);
+                const targetCard = document.querySelector(`[${this.cardIdAttr}="${cardId}"]`);
                 if (!targetCard && placeholder.parentNode) {
                     placeholder.remove();
                 }
